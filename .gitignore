@@ -1,0 +1,35 @@
+# Virtual Environment
+venv/
+*.pyc
+__pycache__/
+
+# Databases
+databases/*.db
+databases/*.db-journal
+databases/*.db-wal
+databases/*.db-shm
+databases/widget_prices.txt
+
+# Database dumps
+database_dumps/
+
+# Python
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test outputs
+/tmp/
+*.log

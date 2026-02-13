@@ -86,7 +86,7 @@ def initialize_databases() -> bool:
         return False
 
 
-def simulate_day(day_num: int, current_date: datetime, total_days: int):
+def simulate_day(day_num: int, current_date: datetime, total_days: int, disabled_operations: set = None):
     """
     Simulate one day of company operations.
 
@@ -94,7 +94,10 @@ def simulate_day(day_num: int, current_date: datetime, total_days: int):
         day_num: Current day number (1-indexed)
         current_date: Current simulation date
         total_days: Total number of days to simulate
+        disabled_operations: Set of operations to skip (for agent replacement)
     """
+    if disabled_operations is None:
+        disabled_operations = set()
     date_str = current_date.strftime("%Y-%m-%d")
     day_name = current_date.strftime("%A")
 
@@ -121,22 +124,34 @@ def simulate_day(day_num: int, current_date: datetime, total_days: int):
     work_str = work_time.strftime("%Y-%m-%d %H:%M:%S")
 
     # Process orders
-    print(f"\n⚙️  Processing orders at {work_str}...")
-    run_command(PROCESS_ORDER, [work_str], "Processing new orders")
+    if 'process' not in disabled_operations:
+        print(f"\n⚙️  Processing orders at {work_str}...")
+        run_command(PROCESS_ORDER, [work_str], "Processing new orders")
+    else:
+        print(f"\n⚙️  Processing orders at {work_str}... [DISABLED - Use your agent]")
 
     # Run manufacturing operations
-    print(f"\n🏭 Running manufacturing operations at {work_str}...")
-    run_command(RUN_OPS, [work_str], "Advancing production stages")
+    if 'ops' not in disabled_operations:
+        print(f"\n🏭 Running manufacturing operations at {work_str}...")
+        run_command(RUN_OPS, [work_str], "Advancing production stages")
+    else:
+        print(f"\n🏭 Running manufacturing operations at {work_str}... [DISABLED - Use your agent]")
 
     # Update inventory every 3 days
     if day_num % 3 == 0:
-        print(f"\n📦 Inventory restock day (every 3 days)...")
-        run_command(UPDATE_INVENTORY, [date_str], "Checking and restocking inventory")
+        if 'restock' not in disabled_operations:
+            print(f"\n📦 Inventory restock day (every 3 days)...")
+            run_command(UPDATE_INVENTORY, [date_str], "Checking and restocking inventory")
+        else:
+            print(f"\n📦 Inventory restock day (every 3 days)... [DISABLED - Use your agent]")
 
     # Pay employees on Fridays
     if current_date.weekday() == 4:  # Friday
-        print(f"\n💰 Payroll day (Friday)...")
-        run_command(PAY_EMPLOYEES, [date_str], "Processing employee payroll")
+        if 'payroll' not in disabled_operations:
+            print(f"\n💰 Payroll day (Friday)...")
+            run_command(PAY_EMPLOYEES, [date_str], "Processing employee payroll")
+        else:
+            print(f"\n💰 Payroll day (Friday)... [DISABLED - Use your agent]")
 
     print(f"\n✓ Day {day_num} complete")
 
@@ -255,6 +270,11 @@ Examples:
   %(prog)s 60 "2026-01-01"                   # Simulate 2 months from Jan 1
   %(prog)s 7 --step                          # Step through 7 days interactively
   %(prog)s 30 "2026-03-01" --step --no-init  # Step mode with existing DB
+
+Agent Replacement Examples:
+  %(prog)s 30 --disable restock              # Disable inventory restocking - use your agent
+  %(prog)s 30 --disable process --disable ops # Disable multiple operations
+  %(prog)s 7 --step --disable payroll        # Step mode with payroll disabled
         """
     )
     parser.add_argument(
@@ -278,6 +298,12 @@ Examples:
         action="store_true",
         help="Run in step mode - pause after each day for user input"
     )
+    parser.add_argument(
+        "--disable",
+        action="append",
+        choices=["process", "ops", "restock", "payroll"],
+        help="Disable specific operations (can be used multiple times). Choices: process (order processing), ops (manufacturing operations), restock (inventory restocking), payroll (employee payment)"
+    )
 
     args = parser.parse_args()
 
@@ -297,6 +323,9 @@ Examples:
     else:
         start_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
+    # Get disabled operations
+    disabled_operations = set(args.disable) if args.disable else set()
+
     # Print simulation parameters
     print("=" * 70)
     print("MANUFACTURING COMPANY SIMULATION")
@@ -308,6 +337,17 @@ Examples:
     print(f"Initialize DB:  {'No (using existing)' if args.no_init else 'Yes (fresh start)'}")
     print(f"Step mode:      {'Yes (interactive)' if args.step else 'No (continuous)'}")
 
+    if disabled_operations:
+        operation_names = {
+            'process': 'Order Processing',
+            'ops': 'Manufacturing Operations',
+            'restock': 'Inventory Restocking',
+            'payroll': 'Employee Payroll'
+        }
+        disabled_list = [operation_names[op] for op in disabled_operations]
+        print(f"Disabled:       {', '.join(disabled_list)}")
+        print(f"                → Replace with your intelligent agents")
+
     # Initialize databases if requested
     if not args.no_init:
         if not initialize_databases():
@@ -318,7 +358,7 @@ Examples:
     try:
         current_date = start_date
         for day_num in range(1, args.days + 1):
-            simulate_day(day_num, current_date, args.days)
+            simulate_day(day_num, current_date, args.days, disabled_operations)
             current_date += timedelta(days=1)
 
             # Step mode - pause for user input

@@ -6,7 +6,10 @@
       "Bash(./venv/bin/pip install:*)",
       "Bash(./venv/bin/python:*)",
       "Bash(chmod:*)",
-      "Bash(git init:*)"
+      "Bash(git init:*)",
+      "Bash(git remote add:*)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)"
     ]
   }
 }

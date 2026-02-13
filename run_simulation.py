@@ -17,6 +17,8 @@ import random
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from sim_state import SimulationState
+
 
 # Script paths
 SCRIPT_DIR = Path(__file__).parent
@@ -86,7 +88,7 @@ def initialize_databases() -> bool:
         return False
 
 
-def simulate_day(day_num: int, current_date: datetime, total_days: int, disabled_operations: set = None):
+def simulate_day(day_num: int, current_date: datetime, total_days: int, disabled_operations: set = None, state_manager: SimulationState = None):
     """
     Simulate one day of company operations.
 
@@ -95,15 +97,39 @@ def simulate_day(day_num: int, current_date: datetime, total_days: int, disabled
         current_date: Current simulation date
         total_days: Total number of days to simulate
         disabled_operations: Set of operations to skip (for agent replacement)
+        state_manager: SimulationState instance for agent synchronization
     """
     if disabled_operations is None:
         disabled_operations = set()
+    if state_manager is None:
+        state_manager = SimulationState()
     date_str = current_date.strftime("%Y-%m-%d")
     day_name = current_date.strftime("%A")
 
     print("\n" + "=" * 70)
     print(f"DAY {day_num}/{total_days}: {date_str} ({day_name})")
     print("=" * 70)
+
+    # Write initial state for the day
+    pending_ops = []
+    if 'process' in disabled_operations:
+        pending_ops.append('process')
+    if 'ops' in disabled_operations:
+        pending_ops.append('ops')
+    if day_num % 3 == 0 and 'restock' in disabled_operations:
+        pending_ops.append('restock')
+    if current_date.weekday() == 4 and 'payroll' in disabled_operations:
+        pending_ops.append('payroll')
+
+    state_manager.write_state(
+        sim_date=date_str,
+        sim_time="09:00:00",
+        day_number=day_num,
+        total_days=total_days,
+        status="running",
+        disabled_operations=disabled_operations,
+        pending_operations=pending_ops
+    )
 
     # Morning operations (09:00)
     morning_time = current_date.replace(hour=9, minute=0, second=0)
@@ -154,6 +180,17 @@ def simulate_day(day_num: int, current_date: datetime, total_days: int, disabled
             print(f"\n💰 Payroll day (Friday)... [DISABLED - Use your agent]")
 
     print(f"\n✓ Day {day_num} complete")
+
+    # Update state to indicate day is complete
+    state_manager.write_state(
+        sim_date=date_str,
+        sim_time="17:00:00",
+        day_number=day_num,
+        total_days=total_days,
+        status="day_complete",
+        disabled_operations=disabled_operations,
+        pending_operations=[]  # All operations for the day are done
+    )
 
 
 def print_final_summary():
@@ -326,6 +363,9 @@ Agent Replacement Examples:
     # Get disabled operations
     disabled_operations = set(args.disable) if args.disable else set()
 
+    # Initialize state manager
+    state_manager = SimulationState()
+
     # Print simulation parameters
     print("=" * 70)
     print("MANUFACTURING COMPANY SIMULATION")
@@ -348,17 +388,29 @@ Agent Replacement Examples:
         print(f"Disabled:       {', '.join(disabled_list)}")
         print(f"                → Replace with your intelligent agents")
 
+    # Write initial state
+    state_manager.write_state(
+        sim_date=start_date.strftime("%Y-%m-%d"),
+        sim_time="00:00:00",
+        day_number=0,
+        total_days=args.days,
+        status="initializing",
+        disabled_operations=disabled_operations,
+        pending_operations=[]
+    )
+
     # Initialize databases if requested
     if not args.no_init:
         if not initialize_databases():
             print("\n✗ Failed to initialize databases. Exiting.")
+            state_manager.clear_state()
             sys.exit(1)
 
     # Run simulation
     try:
         current_date = start_date
         for day_num in range(1, args.days + 1):
-            simulate_day(day_num, current_date, args.days, disabled_operations)
+            simulate_day(day_num, current_date, args.days, disabled_operations, state_manager)
             current_date += timedelta(days=1)
 
             # Step mode - pause for user input
@@ -378,17 +430,47 @@ Agent Replacement Examples:
         # Print final summary
         print_final_summary()
 
+        # Write final state
+        state_manager.write_state(
+            sim_date=end_date.strftime("%Y-%m-%d"),
+            sim_time="23:59:59",
+            day_number=args.days,
+            total_days=args.days,
+            status="finished",
+            disabled_operations=disabled_operations,
+            pending_operations=[]
+        )
+
         print("\n" + "=" * 70)
         print("✓ SIMULATION COMPLETED SUCCESSFULLY")
         print("=" * 70)
+        print(f"\n📊 Simulation state saved to: {state_manager.state_file}")
 
     except KeyboardInterrupt:
         print("\n\n⚠ Simulation interrupted by user")
+        state_manager.write_state(
+            sim_date=current_date.strftime("%Y-%m-%d"),
+            sim_time="00:00:00",
+            day_number=day_num if 'day_num' in locals() else 0,
+            total_days=args.days,
+            status="interrupted",
+            disabled_operations=disabled_operations,
+            pending_operations=[]
+        )
         sys.exit(1)
     except Exception as e:
         print(f"\n✗ Simulation error: {e}")
         import traceback
         traceback.print_exc()
+        state_manager.write_state(
+            sim_date=current_date.strftime("%Y-%m-%d"),
+            sim_time="00:00:00",
+            day_number=day_num if 'day_num' in locals() else 0,
+            total_days=args.days,
+            status="error",
+            disabled_operations=disabled_operations,
+            pending_operations=[]
+        )
         sys.exit(1)
 
 

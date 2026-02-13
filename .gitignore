@@ -33,3 +33,6 @@ Thumbs.db
 # Test outputs
 /tmp/
 *.log
+
+# Simulation state
+sim_state.json

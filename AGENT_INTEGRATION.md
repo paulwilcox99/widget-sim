@@ -1,450 +1,329 @@
-# Intelligent Agent Integration Guide
+# Agent Integration Guide
 
 ## Overview
 
-The simulator allows you to disable built-in operations and replace them with your own intelligent agents. This is perfect for:
-- Testing AI-powered decision making
-- Building autonomous business operations
-- Experimenting with different strategies
-- Benchmarking agent performance
+This guide explains how to build agents that implement real business operations for Acme Widget Works. An agent connects directly to the company databases, reads the current state of orders, inventory, manufacturing, and financials, and writes back its decisions exactly as a human operator would.
 
-## Disabling Operations
+Agents are designed to be portable. The business logic you write against the company databases works unchanged whether you are running against the development simulator or a live production environment.
 
-### Available Operations to Disable
+---
 
-| Operation | Flag | When It Runs | What to Replace |
-|-----------|------|--------------|-----------------|
-| **Order Processing** | `--disable process` | Daily at 10:00 | `process_order.py` - Deduct inventory, start manufacturing |
-| **Manufacturing Ops** | `--disable ops` | Daily at 10:00 | `run_ops.py` - Advance production stages, ship orders |
-| **Inventory Restocking** | `--disable restock` | Every 3 days | `update_inventory.py` - Check stock, reorder parts |
-| **Employee Payroll** | `--disable payroll` | Every Friday | `pay_employees.py` - Pay all employees |
+## Configuring the Development Environment
 
-### Usage Examples
+When developing an agent, you can tell the simulator to skip a built-in operation so your agent handles it instead. This lets you test your agent against a live-changing dataset without it competing with the simulator's default logic.
+
+| Operation | Flag | What your agent takes over |
+|-----------|------|---------------------------|
+| **Order Processing** | `--disable process` | Release orders to manufacturing: check inventory, deduct parts, create MES entries |
+| **Manufacturing Ops** | `--disable ops` | Advance production stages, ship completed orders, record revenue |
+| **Inventory Restocking** | `--disable restock` | Monitor stock levels, purchase parts, record transactions |
+| **Employee Payroll** | `--disable payroll` | Pay employees, record payroll transactions |
 
 ```bash
-# Disable single operation
+# Develop an inventory agent — simulator generates orders and runs ops, your agent handles restocking
 ./venv/bin/python run_simulation.py 30 --disable restock
 
-# Disable multiple operations
+# Develop multiple agents at once
 ./venv/bin/python run_simulation.py 30 --disable process --disable ops
 
-# Combine with step mode for controlled testing
-./venv/bin/python run_simulation.py 7 --step --disable payroll
-
-# Disable everything except order generation
-./venv/bin/python run_simulation.py 30 \
-  --disable process \
-  --disable ops \
-  --disable restock \
-  --disable payroll
+# Use step mode to pause between days while you inspect results and run your agent manually
+./venv/bin/python run_simulation.py 7 --step --disable restock
 ```
 
-## Agent Integration Patterns
+The `--disable` flags are simulator configuration for your development session. Your agent itself does not need to know about them or reference them.
 
-### Pattern 1: File Watcher
+---
 
-Your agent watches the simulation and takes action when needed.
+## Agent Patterns
+
+### Pattern 1: Inventory Restocking Agent
+
+Monitors stock levels and purchases parts when needed. Reads from `inventory.db`, writes restocking decisions back to `inventory.db`, and records transactions in `erp.db`.
 
 ```python
-import time
 import sqlite3
-from pathlib import Path
-from datetime import datetime
+from contextlib import contextmanager
 
-class InventoryAgent:
-    """Intelligent agent that manages inventory restocking."""
+DB_DIR = "databases"
 
-    def __init__(self, db_dir="databases"):
-        self.db_dir = Path(db_dir)
-        self.last_check = None
-
-    def should_restock(self):
-        """Check if restocking is needed based on intelligent rules."""
-        conn = sqlite3.connect(self.db_dir / "inventory.db")
-        cursor = conn.cursor()
-
-        # Get parts below threshold
-        cursor.execute("""
-            SELECT part_name, quantity_available
-            FROM inventory_levels
-            WHERE quantity_available < 200
-        """)
-
-        low_stock = cursor.fetchall()
+@contextmanager
+def get_db(name, read_only=False):
+    conn = sqlite3.connect(f"{DB_DIR}/{name}")
+    conn.row_factory = sqlite3.Row
+    if read_only:
+        conn.execute("PRAGMA query_only = ON")
+    try:
+        yield conn
+        if not read_only:
+            conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
         conn.close()
 
-        return len(low_stock) > 0
 
-    def restock(self):
-        """Execute restocking with intelligent decisions."""
-        # Your custom restocking logic here
-        # Could use ML to predict demand, optimize order quantities, etc.
-        import subprocess
-        subprocess.run([
-            './venv/bin/python',
-            'update_inventory.py',
-            datetime.now().strftime('%Y-%m-%d')
-        ])
+class InventoryRestockAgent:
+    """Manages parts purchasing based on current stock and pending demand."""
 
-    def run(self):
-        """Watch and respond to inventory needs."""
-        while True:
-            if self.should_restock():
-                print("🤖 AGENT: Detected low inventory, restocking...")
-                self.restock()
-            time.sleep(60)  # Check every minute
-
-# Run in parallel with simulation
-# Terminal 1: ./venv/bin/python run_simulation.py 30 --disable restock --step
-# Terminal 2: python your_agent.py
-```
-
-### Pattern 2: Named Pipe Control
-
-Agent controls simulation flow through a named pipe.
-
-```bash
-# Setup named pipe
-mkfifo /tmp/sim_control
-
-# Start simulation (controlled by agent)
-./venv/bin/python run_simulation.py 30 \
-  --disable process \
-  --step \
-  < /tmp/sim_control &
-
-# Your agent script
-python agent_controller.py
-```
-
-```python
-# agent_controller.py
-import time
-import subprocess
-
-class SimulationController:
-    """Agent that controls simulation and replaces operations."""
-
-    def __init__(self):
-        self.pipe = open('/tmp/sim_control', 'w')
-        self.day = 0
-
-    def process_orders_intelligently(self):
-        """Your intelligent order processing logic."""
-        # Analyze which orders to process
-        # Optimize inventory usage
-        # Prioritize high-value orders
-        # etc.
-        subprocess.run([
-            './venv/bin/python',
-            'process_order.py',
-            f'2026-03-{self.day:02d} 10:00:00'
-        ])
-
-    def advance_day(self):
-        """Advance simulation to next day."""
-        self.day += 1
-        self.pipe.write('\n')
-        self.pipe.flush()
-
-    def run(self):
-        """Run agent-controlled simulation."""
-        for day in range(1, 31):
-            time.sleep(2)  # Wait for day operations
-
-            # Your intelligent decision making
-            self.process_orders_intelligently()
-
-            # Advance to next day
-            self.advance_day()
-
-        self.pipe.close()
-```
-
-### Pattern 3: API Server
-
-Run simulation as a service with agents calling APIs.
-
-```python
-from flask import Flask, request
-import subprocess
-import threading
-
-app = Flask(__name__)
-simulation_thread = None
-
-@app.route('/operations/process', methods=['POST'])
-def process_orders():
-    """API endpoint for agent to trigger order processing."""
-    date_time = request.json.get('datetime')
-    result = subprocess.run([
-        './venv/bin/python',
-        'process_order.py',
-        date_time
-    ], capture_output=True, text=True)
-    return {'status': 'success', 'output': result.stdout}
-
-@app.route('/operations/restock', methods=['POST'])
-def restock_inventory():
-    """API endpoint for agent to trigger restocking."""
-    date = request.json.get('date')
-    # Your intelligent restocking logic
-    result = subprocess.run([
-        './venv/bin/python',
-        'update_inventory.py',
-        date
-    ], capture_output=True, text=True)
-    return {'status': 'success', 'output': result.stdout}
-
-@app.route('/operations/advance', methods=['POST'])
-def advance_simulation():
-    """API endpoint to advance simulation day."""
-    # Send to simulation control pipe
-    with open('/tmp/sim_control', 'w') as f:
-        f.write('\n')
-    return {'status': 'advanced'}
-
-if __name__ == '__main__':
-    # Start simulation in background
-    # Terminal 1: ./venv/bin/python run_simulation.py 30 --disable process --disable restock --step < /tmp/sim_control
-    # Terminal 2: python api_server.py
-
-    app.run(port=5000)
-```
-
-## Use Cases
-
-### 1. ML-Based Inventory Management
-
-```python
-class MLInventoryAgent:
-    """Use machine learning to optimize inventory levels."""
-
-    def predict_demand(self, part_name):
-        """Predict future demand using historical data."""
-        # Your ML model here
-        pass
-
-    def optimize_order_quantity(self, part_name, current_stock):
-        """Calculate optimal order quantity."""
-        predicted_demand = self.predict_demand(part_name)
-        lead_time = 3  # days
-        safety_stock = predicted_demand * 0.2
-
-        order_qty = max(0, predicted_demand * lead_time + safety_stock - current_stock)
-        return order_qty
-
-    def restock(self):
-        """Smart restocking based on predictions."""
-        # Custom implementation using ML
-        pass
-```
-
-### 2. Dynamic Pricing Agent
-
-```python
-class PricingAgent:
-    """Dynamically adjust order prices based on demand."""
-
-    def calculate_optimal_price(self, widget_type, inventory_level):
-        """Calculate price based on supply/demand."""
-        base_cost = self.get_widget_cost(widget_type)
-
-        # Higher prices when inventory is low
-        if inventory_level < 100:
-            markup = 0.40  # 40% margin
+    def run(self, run_date: str):
+        shortfalls = self._assess_needs()
+        if shortfalls:
+            print(f"Restocking {len(shortfalls)} parts...")
+            self._purchase_parts(shortfalls, run_date)
         else:
-            markup = 0.25  # 25% margin
+            print("Inventory sufficient — no action needed")
 
-        return base_cost / (1 - markup)
+    def _assess_needs(self):
+        """Identify parts insufficient to cover pending orders."""
+        with get_db("inventory.db", read_only=True) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT part_name, quantity_available FROM inventory_levels")
+            stock = {row["part_name"]: row["quantity_available"] for row in cursor.fetchall()}
+            cursor.execute("SELECT part_name, widget_type, quantity_needed, unit_cost FROM bom")
+            bom = cursor.fetchall()
+
+        with get_db("crm.db", read_only=True) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT widget_type, SUM(quantity) as total_qty
+                FROM orders WHERE status = 'order_received'
+                GROUP BY widget_type
+            """)
+            demand = {row["widget_type"]: row["total_qty"] for row in cursor.fetchall()}
+
+        shortfalls = {}
+        for row in bom:
+            needed = row["quantity_needed"] * demand.get(row["widget_type"], 0)
+            available = stock.get(row["part_name"], 0)
+            if available < needed:
+                deficit = needed - available
+                if row["part_name"] not in shortfalls or shortfalls[row["part_name"]]["deficit"] < deficit:
+                    shortfalls[row["part_name"]] = {
+                        "deficit": deficit,
+                        "unit_cost": row["unit_cost"]
+                    }
+        return shortfalls
+
+    def _purchase_parts(self, shortfalls, purchase_date):
+        """Buy parts to cover shortfalls, update inventory, record transactions."""
+        with get_db("inventory.db") as inv_conn:
+            with get_db("erp.db") as erp_conn:
+                for part_name, info in shortfalls.items():
+                    qty = info["deficit"]
+                    cost = round(qty * info["unit_cost"], 2)
+
+                    inv_conn.execute(
+                        "UPDATE inventory_levels SET quantity_available = quantity_available + ? WHERE part_name = ?",
+                        (qty, part_name)
+                    )
+                    erp_conn.execute("""
+                        INSERT INTO financial_transactions
+                            (transaction_type, amount, date, description)
+                        VALUES ('inventory_purchase', ?, ?, ?)
+                    """, (cost, purchase_date, f"Restocked {part_name}: {qty} units"))
+
+                    print(f"  {part_name}: +{qty} units (${cost:,.2f})")
 ```
 
-### 3. Workflow Optimization Agent
+### Pattern 2: Order Processing Agent
+
+Accepts pending orders into manufacturing. Reads from `crm.db` and `inventory.db`, deducts parts, creates MES entries, and records COGS in `erp.db`.
 
 ```python
-class WorkflowAgent:
-    """Optimize order processing workflow."""
+class OrderProcessingAgent:
+    """Releases orders from the queue into manufacturing."""
 
-    def prioritize_orders(self):
-        """Intelligent order prioritization."""
-        # Sort by:
-        # - High value customers
-        # - Urgent delivery dates
-        # - Inventory availability
-        # - Profit margins
-        pass
+    def run(self, process_datetime: str):
+        with get_db("crm.db", read_only=True) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT order_id, widget_type, quantity
+                FROM orders WHERE status = 'order_received'
+                ORDER BY order_id
+            """)
+            pending = cursor.fetchall()
 
-    def batch_processing(self):
-        """Process orders in optimized batches."""
-        # Group similar orders
-        # Minimize setup times
-        # Optimize resource utilization
-        pass
+        for order in pending:
+            ok, issues = self._check_inventory(order["widget_type"], order["quantity"])
+            if ok:
+                self._process_order(order["order_id"], order["widget_type"],
+                                    order["quantity"], process_datetime)
+            else:
+                print(f"Order #{order['order_id']} skipped — {'; '.join(issues)}")
+
+    def _check_inventory(self, widget_type, quantity):
+        with get_db("inventory.db", read_only=True) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT b.part_name, b.quantity_needed, i.quantity_available
+                FROM bom b
+                JOIN inventory_levels i ON b.part_name = i.part_name
+                WHERE b.widget_type = ?
+            """, (widget_type,))
+            shortfalls = [
+                f"{r['part_name']} (need {r['quantity_needed'] * quantity}, have {r['quantity_available']})"
+                for r in cursor.fetchall()
+                if r["quantity_available"] < r["quantity_needed"] * quantity
+            ]
+        return len(shortfalls) == 0, shortfalls
+
+    def _process_order(self, order_id, widget_type, quantity, process_datetime):
+        with get_db("inventory.db", read_only=True) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT part_name, quantity_needed, unit_cost FROM bom WHERE widget_type = ?",
+                (widget_type,)
+            )
+            bom = cursor.fetchall()
+
+        total_cost = sum(p["quantity_needed"] * quantity * p["unit_cost"] for p in bom)
+
+        with get_db("inventory.db") as inv:
+            for part in bom:
+                inv.execute(
+                    "UPDATE inventory_levels SET quantity_available = quantity_available - ? WHERE part_name = ?",
+                    (part["quantity_needed"] * quantity, part["part_name"])
+                )
+
+        with get_db("crm.db") as crm:
+            crm.execute(
+                "UPDATE orders SET status = 'order_processing' WHERE order_id = ?",
+                (order_id,)
+            )
+
+        with get_db("mes.db") as mes:
+            for stage in ["assembly", "test", "inspection", "shipping"]:
+                mes.execute(
+                    "INSERT INTO production_tracking (order_id, stage, start_datetime) VALUES (?, ?, ?)",
+                    (order_id, stage, process_datetime if stage == "assembly" else None)
+                )
+
+        with get_db("erp.db") as erp:
+            erp.execute("""
+                INSERT INTO financial_transactions
+                    (transaction_type, amount, date, description, related_id)
+                VALUES ('inventory_purchase', ?, ?, ?, ?)
+            """, (-round(total_cost, 2), process_datetime[:10],
+                  f"Inventory consumed for Order #{order_id} ({quantity}x {widget_type})",
+                  order_id))
+
+        print(f"Order #{order_id} released to manufacturing (COGS: ${total_cost:,.2f})")
 ```
+
+### Pattern 3: Decision-Making Agent
+
+Uses business data to make intelligent choices rather than applying fixed rules:
+
+```python
+class PricingAdvisorAgent:
+    """
+    Monitors margin on recent orders and flags orders priced below target.
+    Read-only — does not modify any data.
+    """
+
+    def run(self, run_date: str, lookback_days: int = 7):
+        with get_db("crm.db", read_only=True) as crm:
+            cursor = crm.cursor()
+            cursor.execute("""
+                SELECT order_id, widget_type, quantity, unit_price,
+                       quantity * unit_price as revenue
+                FROM orders
+                WHERE date_ordered >= date(?, ?)
+                AND status != 'order_received'
+            """, (run_date, f"-{lookback_days} days"))
+            orders = cursor.fetchall()
+
+        with get_db("inventory.db", read_only=True) as inv:
+            cursor = inv.cursor()
+            cursor.execute("""
+                SELECT widget_type, SUM(quantity_needed * unit_cost) as mfg_cost
+                FROM bom GROUP BY widget_type
+            """)
+            costs = {row["widget_type"]: row["mfg_cost"] for row in cursor.fetchall()}
+
+        for order in orders:
+            mfg_cost = costs.get(order["widget_type"], 0) * order["quantity"]
+            margin = (order["revenue"] - mfg_cost) / order["revenue"] if order["revenue"] else 0
+            if margin < 0.20:
+                print(f"Low margin alert: Order #{order['order_id']} "
+                      f"({order['widget_type']}) margin={margin:.1%}")
+
+
+class WorkflowOptimizationAgent:
+    """Returns pending orders sorted for maximum business impact."""
+
+    def get_prioritized_orders(self):
+        with get_db("crm.db", read_only=True) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT order_id, widget_type, quantity, unit_price,
+                       quantity * unit_price as total_value, predicted_ship_date
+                FROM orders WHERE status = 'order_received'
+            """)
+            orders = [dict(row) for row in cursor.fetchall()]
+
+        # Highest value first, then nearest deadline, then batch by widget type
+        return sorted(orders, key=lambda x: (
+            -x["total_value"],
+            x["predicted_ship_date"],
+            x["widget_type"]
+        ))
+```
+
+---
+
+## Scheduling
+
+Agents are triggered by date and time. See the [Agent Synchronization Guide](AGENT_SYNC_GUIDE.md) for patterns on scheduling agents via cron, event bus, or fixed-interval polling, and for how to run agents alongside the simulator during development.
+
+---
 
 ## Testing Your Agent
 
-### 1. Start Simple
+### 1. Run the simulator with one operation disabled, manually trigger your agent each day
+
 ```bash
-# Test with one disabled operation
+# Terminal 1 — simulator handles everything except restocking
 ./venv/bin/python run_simulation.py 7 --step --disable restock
-
-# Manually trigger your agent when needed
-./venv/bin/python your_agent.py
 ```
 
-### 2. Add Monitoring
-```python
-from example_monitor import DatabaseMonitor
-
-monitor = DatabaseMonitor()
-monitor.capture_baseline()
-
-# After your agent acts
-changes = monitor.analyze_changes()
-valid = monitor.check_invariants()
-
-if not valid:
-    print("Agent caused data integrity issues!")
-```
-
-### 3. Benchmark Performance
+After each simulated day pauses, run your agent in a second terminal:
 ```bash
-# Run baseline (no agents)
-./venv/bin/python run_simulation.py 30 "2026-03-01"
-# Note: Revenue, costs, efficiency
-
-# Run with your agent
-./venv/bin/python run_simulation.py 30 "2026-03-01" --disable restock
-python your_agent.py
-# Compare: Did your agent improve performance?
+python restock_agent.py 2026-03-01
 ```
 
-## Example: Complete Agent Implementation
+### 2. Validate database integrity after each action
 
 ```python
-#!/usr/bin/env python3
-"""
-intelligent_restock_agent.py - ML-powered inventory management
-"""
-
-import time
-import sqlite3
-import subprocess
-from datetime import datetime
-from pathlib import Path
-
-class IntelligentRestockAgent:
-    """Agent that replaces inventory restocking with intelligent decisions."""
-
-    def __init__(self, db_dir="databases"):
-        self.db_dir = Path(db_dir)
-        self.restock_count = 0
-
-    def analyze_inventory(self):
-        """Analyze current inventory status."""
-        conn = sqlite3.connect(self.db_dir / "inventory.db")
+def check_no_negative_inventory():
+    with get_db("inventory.db", read_only=True) as conn:
         cursor = conn.cursor()
-
-        # Get critical parts
-        cursor.execute("""
-            SELECT part_name, quantity_available
-            FROM inventory_levels
-            WHERE quantity_available < 300
-            ORDER BY quantity_available
-        """)
-
-        critical_parts = cursor.fetchall()
-        conn.close()
-
-        return critical_parts
-
-    def decide_restock(self):
-        """Make intelligent decision about restocking."""
-        critical_parts = self.analyze_inventory()
-
-        if not critical_parts:
-            print("🤖 AGENT: Inventory levels healthy, no action needed")
-            return False
-
-        print(f"🤖 AGENT: Found {len(critical_parts)} parts below threshold")
-        for part, qty in critical_parts[:5]:
-            print(f"   - {part}: {qty} units")
-
-        # Intelligent decision
-        # Could use ML model, historical data, demand forecasting, etc.
-        urgency_score = sum(1 for _, qty in critical_parts if qty < 100)
-
-        if urgency_score >= 3:
-            print("🤖 AGENT: High urgency - executing restock NOW")
-            return True
-        elif urgency_score >= 1:
-            print("🤖 AGENT: Medium urgency - will restock soon")
-            return False  # Wait for next check
-        else:
-            print("🤖 AGENT: Low urgency - monitoring")
-            return False
-
-    def execute_restock(self):
-        """Execute restocking operation."""
-        date = datetime.now().strftime("%Y-%m-%d")
-        result = subprocess.run(
-            ['./venv/bin/python', 'update_inventory.py', date],
-            capture_output=True,
-            text=True
+        cursor.execute(
+            "SELECT part_name, quantity_available FROM inventory_levels WHERE quantity_available < 0"
         )
+        problems = cursor.fetchall()
+    assert not problems, f"Negative inventory: {[p['part_name'] for p in problems]}"
 
-        if result.returncode == 0:
-            self.restock_count += 1
-            print(f"🤖 AGENT: Restock #{self.restock_count} completed successfully")
-        else:
-            print(f"🤖 AGENT: Restock failed - {result.stderr}")
-
-    def run(self, check_interval=60):
-        """Run agent loop."""
-        print("🤖 AGENT: Intelligent Restock Agent starting...")
-        print(f"🤖 AGENT: Checking inventory every {check_interval} seconds")
-
-        try:
-            while True:
-                if self.decide_restock():
-                    self.execute_restock()
-
-                time.sleep(check_interval)
-
-        except KeyboardInterrupt:
-            print(f"\n🤖 AGENT: Shutting down (executed {self.restock_count} restocks)")
-
-if __name__ == "__main__":
-    agent = IntelligentRestockAgent()
-    agent.run(check_interval=30)  # Check every 30 seconds
+def check_transaction_integrity():
+    with get_db("erp.db", read_only=True) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT SUM(amount) as net FROM financial_transactions")
+        net = cursor.fetchone()["net"] or 0
+    print(f"Net financial position: ${net:,.2f}")
 ```
 
-**Usage:**
-```bash
-# Terminal 1 - Run simulation with restocking disabled
-./venv/bin/python run_simulation.py 30 --disable restock --step
+### 3. Compare outcomes
 
-# Terminal 2 - Run your intelligent agent
-python intelligent_restock_agent.py
-```
+Run the simulator with and without your agent for the same date range, then compare the final financial summary to measure whether your agent improved on the default behavior.
+
+---
 
 ## Tips for Agent Development
 
-1. **Start with monitoring** - Use `example_monitor.py` as a base
-2. **Test incrementally** - Disable one operation at a time
-3. **Use step mode** - Easier to debug agent behavior
-4. **Log everything** - Track agent decisions and outcomes
-5. **Compare performance** - Run with and without agents
-6. **Handle errors** - Agents should be resilient
-7. **Validate data** - Check database integrity after agent actions
-
-## Next Steps
-
-- Build agents for different operations
-- Combine multiple agents (multi-agent system)
-- Use reinforcement learning to optimize decisions
-- Add monitoring dashboards for agent performance
-- Create agent benchmarks and competitions
-
-Your simulation is now an AI playground! 🤖🎯
+1. **Write to databases directly** — your agent's interface is the company databases, not simulator scripts or utilities
+2. **Start with read-only monitoring** — understand the data flow before writing anything
+3. **Test one operation at a time** — disable a single operation and verify your agent handles it correctly before tackling multiple
+4. **Log your decisions** — record what your agent decided and why; raw database state alone is hard to debug
+5. **Check invariants after every write** — no negative inventory, no duplicate transactions, status transitions in order
+6. **Make agents idempotent** — running an agent twice for the same date should produce the same result, not duplicate records

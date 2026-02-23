@@ -2,391 +2,245 @@
 
 ## Overview
 
-The simulation writes a `sim_state.json` file that agents can monitor to synchronize their actions with the simulation timeline. This is the **recommended method** for agent integration.
+Agents for Acme Widget Works are triggered by date and time and work directly against the company databases. There is no special synchronization protocol — an agent simply runs on a schedule, reads the current state of the business from the databases, makes decisions, and writes results back.
 
-## The State File: `sim_state.json`
+This is the same model whether you are running in development (triggered manually or by cron against the simulator's databases) or in production (triggered by your scheduler against live systems).
 
-### Location
-The file is created in the same directory as `run_simulation.py`.
+---
 
-### Format
-```json
-{
-  "simulation": {
-    "date": "2026-03-15",
-    "time": "17:00:00",
-    "datetime": "2026-03-15 17:00:00",
-    "day_number": 15,
-    "total_days": 30,
-    "status": "day_complete",
-    "progress_percent": 50.0
-  },
-  "operations": {
-    "disabled": ["restock", "payroll"],
-    "pending": ["restock"]
-  },
-  "metadata": {
-    "last_update": "2026-02-13T10:17:32.251413",
-    "state_version": "1.0"
-  }
-}
-```
+## How Agents Are Triggered
 
-### Fields Explained
-
-**simulation** section:
-- `date`: Current simulation date (YYYY-MM-DD)
-- `time`: Current simulation time (HH:MM:SS)
-- `datetime`: Combined date and time
-- `day_number`: Current day (1-indexed)
-- `total_days`: Total days in simulation
-- `status`: Current status (see below)
-- `progress_percent`: Completion percentage
-
-**operations** section:
-- `disabled`: List of operations replaced by agents
-- `pending`: Operations that need to be performed NOW by agents
-
-**metadata** section:
-- `last_update`: Real-world timestamp when file was updated
-- `state_version`: State file format version
-
-### Status Values
-
-| Status | Meaning | When to Act |
-|--------|---------|-------------|
-| `initializing` | Simulation starting up | Wait |
-| `running` | Day operations in progress | Check pending operations |
-| `day_complete` | All operations done for day | Agents can do end-of-day tasks |
-| `finished` | Simulation completed | Final cleanup |
-| `interrupted` | User stopped simulation | Handle gracefully |
-| `error` | Simulation error occurred | Log and exit |
-
-## Using the State File
-
-### Method 1: Direct File Monitoring (Simplest)
-
-```python
-import json
-import time
-from pathlib import Path
-
-def watch_simulation():
-    """Simple file watching loop."""
-    state_file = Path("sim_state.json")
-    last_day = 0
-
-    while True:
-        if not state_file.exists():
-            time.sleep(1)
-            continue
-
-        with open(state_file) as f:
-            state = json.load(f)
-
-        current_day = state["simulation"]["day_number"]
-        status = state["simulation"]["status"]
-
-        # Detect new day
-        if current_day > last_day:
-            print(f"New day: {state['simulation']['date']}")
-            last_day = current_day
-
-            # Check for pending operations
-            for op in state["operations"]["pending"]:
-                print(f"Need to handle: {op}")
-                # Call your handler function
-
-        # Exit if simulation done
-        if status in ["finished", "interrupted", "error"]:
-            break
-
-        time.sleep(0.5)
-```
-
-### Method 2: Using SimulationState Class (Recommended)
-
-```python
-from sim_state import SimulationState
-import subprocess
-
-class MyAgent:
-    def __init__(self):
-        self.state = SimulationState()
-
-    def run(self):
-        # Wait for simulation to start
-        while True:
-            state = self.state.read_state()
-            if state and state["simulation"]["status"] != "initializing":
-                break
-            time.sleep(0.5)
-
-        # Monitor each day
-        total_days = state["simulation"]["total_days"]
-
-        for day in range(1, total_days + 1):
-            # Wait for day operations to start
-            self.state.wait_for_status("running", timeout=30)
-
-            # Check what needs to be done
-            pending = self.state.get_pending_operations()
-
-            for operation in pending:
-                if operation == "restock":
-                    self.handle_restock()
-                elif operation == "process":
-                    self.handle_process()
-                # etc.
-
-            # Wait for day to complete
-            self.state.wait_for_status("day_complete", timeout=300)
-```
-
-### Method 3: Event-Driven with inotify (Advanced)
-
-```python
-import inotify.adapters
-
-def watch_state_file_events():
-    """Watch for file modifications using inotify."""
-    i = inotify.adapters.Inotify()
-    i.add_watch('.')
-
-    for event in i.event_gen(yield_nones=False):
-        (_, type_names, path, filename) = event
-
-        if filename == "sim_state.json" and "IN_MODIFY" in type_names:
-            # File was modified - read and process
-            state = read_state()
-            process_state(state)
-```
-
-## Complete Example: Synchronized Restock Agent
+Agents receive a date as input — either passed as an argument or derived from the current date — and use that date to scope their work and timestamp any records they write.
 
 ```python
 #!/usr/bin/env python3
-"""Agent that handles inventory restocking when disabled."""
+"""
+Inventory restock agent.
+Run daily via cron: 0 8 * * * /usr/bin/python3 /path/to/restock_agent.py
+"""
 
-import time
-import subprocess
-from sim_state import SimulationState
+import sys
+from datetime import date
 
-class RestockAgent:
-    def __init__(self):
-        self.state = SimulationState()
-        self.restock_count = 0
 
-    def handle_restock(self, sim_date):
-        """Execute inventory restocking."""
-        print(f"🤖 AGENT: Restocking inventory for {sim_date}")
+def main():
+    # Accept an optional date argument for testing; default to today
+    if len(sys.argv) > 1:
+        run_date = sys.argv[1]   # YYYY-MM-DD
+    else:
+        run_date = date.today().isoformat()
 
-        result = subprocess.run(
-            ['./venv/bin/python', 'update_inventory.py', sim_date],
-            capture_output=True,
-            text=True
-        )
+    agent = RestockAgent(db_dir="/path/to/databases")
+    agent.run(run_date)
 
-        if result.returncode == 0:
-            self.restock_count += 1
-            print(f"🤖 AGENT: ✓ Restock #{self.restock_count} completed")
-        else:
-            print(f"🤖 AGENT: ✗ Restock failed")
-
-    def run(self):
-        """Main agent loop."""
-        print("🤖 AGENT: Starting synchronized restock agent...")
-
-        # Wait for simulation to initialize
-        while True:
-            state = self.state.read_state()
-            if state and state["simulation"]["status"] != "initializing":
-                break
-            time.sleep(0.5)
-
-        print(f"🤖 AGENT: Monitoring {state['simulation']['total_days']} days")
-
-        # Monitor simulation
-        last_day = 0
-
-        while True:
-            state = self.state.read_state()
-            if not state:
-                time.sleep(0.5)
-                continue
-
-            current_day = state["simulation"]["day_number"]
-            status = state["simulation"]["status"]
-
-            # Check for pending restock operations
-            if "restock" in state["operations"]["pending"] and current_day > last_day:
-                self.handle_restock(state["simulation"]["date"])
-                last_day = current_day
-
-            # Exit if simulation complete
-            if status in ["finished", "interrupted", "error"]:
-                print(f"🤖 AGENT: Simulation ended - performed {self.restock_count} restocks")
-                break
-
-            time.sleep(1)
 
 if __name__ == "__main__":
-    agent = RestockAgent()
-    agent.run()
+    main()
 ```
 
-## Running Agents with Simulation
-
-### Terminal 1: Start Simulation
-```bash
-./venv/bin/python run_simulation.py 30 "2026-03-01" --disable restock --step
+Cron example — run restocking agent every morning at 8 AM:
+```
+0 8 * * * /usr/bin/python3 /opt/agents/restock_agent.py >> /var/log/restock_agent.log 2>&1
 ```
 
-### Terminal 2: Start Agent
-```bash
-python my_restock_agent.py
+Payroll agent — run every Friday:
+```
+0 9 * * 5 /usr/bin/python3 /opt/agents/payroll_agent.py >> /var/log/payroll_agent.log 2>&1
 ```
 
-The agent will automatically:
-1. Wait for simulation to initialize
-2. Monitor `sim_state.json` for changes
-3. Execute restocking when `pending` contains "restock"
-4. Exit when simulation finishes
+---
 
-## Pre-Built Example
+## Agent Structure
 
-We provide a complete synchronized agent example:
+Every agent follows the same pattern: receive a date, read from the databases, decide, write back.
 
-```bash
-# Terminal 1
-./venv/bin/python run_simulation.py 7 "2026-03-01" --disable restock --disable payroll --step
-
-# Terminal 2
-./venv/bin/python sync_agent_example.py
-```
-
-The example agent (`sync_agent_example.py`) demonstrates:
-- Waiting for simulation start
-- Monitoring day progression
-- Handling multiple operation types
-- Proper synchronization
-- Clean shutdown
-
-## Best Practices
-
-### 1. Always Check Status
 ```python
-state = read_state()
-if state["simulation"]["status"] == "running":
-    # Safe to take action
+import sqlite3
+from contextlib import contextmanager
+
+
+@contextmanager
+def get_db(db_path, read_only=False):
+    """Context manager for safe database connections."""
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    if read_only:
+        conn.execute("PRAGMA query_only = ON")
+    try:
+        yield conn
+        if not read_only:
+            conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+class RestockAgent:
+    def __init__(self, db_dir="databases"):
+        self.crm_db    = f"{db_dir}/crm.db"
+        self.inv_db    = f"{db_dir}/inventory.db"
+        self.erp_db    = f"{db_dir}/erp.db"
+
+    def run(self, run_date: str):
+        """
+        Entry point. Called by the scheduler with today's date.
+        Reads current state, decides what to purchase, writes results.
+        """
+        shortfalls = self._assess_shortfalls()
+
+        if not shortfalls:
+            print(f"{run_date}: inventory sufficient, no action needed")
+            return
+
+        print(f"{run_date}: restocking {len(shortfalls)} parts")
+        self._purchase_parts(shortfalls, run_date)
+
+    def _assess_shortfalls(self):
+        """Compare current stock against what pending orders require."""
+        with get_db(self.inv_db, read_only=True) as inv:
+            cursor = inv.cursor()
+            cursor.execute("SELECT part_name, quantity_available FROM inventory_levels")
+            stock = {row["part_name"]: row["quantity_available"] for row in cursor.fetchall()}
+            cursor.execute("SELECT part_name, widget_type, quantity_needed, unit_cost FROM bom")
+            bom = cursor.fetchall()
+
+        with get_db(self.crm_db, read_only=True) as crm:
+            cursor = crm.cursor()
+            cursor.execute("""
+                SELECT widget_type, SUM(quantity) as total
+                FROM orders WHERE status = 'order_received'
+                GROUP BY widget_type
+            """)
+            demand = {row["widget_type"]: row["total"] for row in cursor.fetchall()}
+
+        shortfalls = {}
+        for row in bom:
+            needed = row["quantity_needed"] * demand.get(row["widget_type"], 0)
+            available = stock.get(row["part_name"], 0)
+            if available < needed:
+                deficit = needed - available
+                if row["part_name"] not in shortfalls or shortfalls[row["part_name"]]["deficit"] < deficit:
+                    shortfalls[row["part_name"]] = {
+                        "deficit": deficit,
+                        "unit_cost": row["unit_cost"]
+                    }
+        return shortfalls
+
+    def _purchase_parts(self, shortfalls, purchase_date):
+        """Write inventory increases and financial transactions."""
+        with get_db(self.inv_db) as inv:
+            with get_db(self.erp_db) as erp:
+                for part_name, info in shortfalls.items():
+                    qty  = info["deficit"]
+                    cost = round(qty * info["unit_cost"], 2)
+
+                    inv.execute(
+                        "UPDATE inventory_levels SET quantity_available = quantity_available + ? WHERE part_name = ?",
+                        (qty, part_name)
+                    )
+                    erp.execute("""
+                        INSERT INTO financial_transactions
+                            (transaction_type, amount, date, description)
+                        VALUES ('inventory_purchase', ?, ?, ?)
+                    """, (cost, purchase_date, f"Restocked {part_name}: {qty} units"))
+
+                    print(f"  {part_name}: +{qty} units (${cost:,.2f})")
 ```
 
-### 2. Handle Missing File
+---
+
+## Multi-Agent Coordination
+
+When multiple agents run on the same databases, each agent owns a specific domain and they coordinate through the data itself — not through any shared messaging layer.
+
+| Agent | Reads | Writes |
+|-------|-------|--------|
+| Order processing agent | `crm.db` orders (status=order_received), `inventory.db` bom + levels | `inventory.db` levels, `crm.db` status, `mes.db` tracking, `erp.db` transactions |
+| Manufacturing ops agent | `crm.db` orders (status=order_processing), `mes.db` tracking | `mes.db` tracking, `crm.db` status + date_shipped, `erp.db` transactions |
+| Restock agent | `inventory.db` levels + bom, `crm.db` pending orders | `inventory.db` levels, `erp.db` transactions |
+| Payroll agent | `erp.db` employees | `erp.db` transactions |
+
+Because each agent touches different tables (or uses row-level status fields to claim work), they do not need to know about each other. The databases are the coordination layer.
+
+---
+
+## Handling Day-of-Week Logic
+
+Some operations only run on certain days. The agent checks the date it receives:
+
 ```python
-from pathlib import Path
+from datetime import date, datetime
 
-state_file = Path("sim_state.json")
-if not state_file.exists():
-    print("Waiting for simulation to start...")
-    time.sleep(1)
+def run(self, run_date: str):
+    dt = datetime.strptime(run_date, "%Y-%m-%d")
+
+    # Payroll only on Fridays (weekday 4)
+    if dt.weekday() != 4:
+        print(f"{run_date} is not a Friday — payroll skipped")
+        return
+
+    self._process_payroll(run_date)
+
+def _process_payroll(self, pay_date):
+    with get_db(self.erp_db, read_only=True) as erp:
+        cursor = erp.cursor()
+        cursor.execute("SELECT employee_id, name, title, weekly_salary FROM employees")
+        employees = cursor.fetchall()
+
+    with get_db(self.erp_db) as erp:
+        for emp in employees:
+            erp.execute("""
+                INSERT INTO financial_transactions
+                    (transaction_type, amount, date, description, related_id)
+                VALUES ('employee_payment', ?, ?, ?, ?)
+            """, (-emp["weekly_salary"], pay_date,
+                  f"Weekly salary: {emp['name']} ({emp['title']})", emp["employee_id"]))
+
+    print(f"Payroll complete: {len(employees)} employees paid")
 ```
 
-### 3. Use Timeouts
+---
+
+## Idempotency
+
+Agents should be safe to run more than once for the same date without creating duplicate records. Check before writing:
+
 ```python
-# Don't wait forever
-state.wait_for_status("running", timeout=30)
+def _already_paid_today(self, pay_date):
+    """Return True if payroll was already processed for this date."""
+    with get_db(self.erp_db, read_only=True) as erp:
+        cursor = erp.cursor()
+        cursor.execute("""
+            SELECT COUNT(*) as n FROM financial_transactions
+            WHERE transaction_type = 'employee_payment' AND date = ?
+        """, (pay_date,))
+        return cursor.fetchone()["n"] > 0
+
+def run(self, run_date):
+    if self._already_paid_today(run_date):
+        print(f"{run_date}: payroll already processed, skipping")
+        return
+    self._process_payroll(run_date)
 ```
 
-### 4. Handle Errors Gracefully
-```python
-try:
-    state = self.state.read_state()
-except json.JSONDecodeError:
-    # File is being written, try again
-    time.sleep(0.1)
-    continue
-```
+---
 
-### 5. Log All Actions
-```python
-import logging
+## Developing Against the Simulator
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("agent")
+The simulator generates realistic business activity across the company databases each simulated day. To develop your agent against it:
 
-logger.info(f"Handled restock for day {day}")
-```
+1. Start the simulator with the operation your agent will handle disabled:
+   ```bash
+   ./venv/bin/python run_simulation.py 30 "2026-03-01" --disable restock --step
+   ```
 
-## Debugging
+2. After each simulated day completes, run your agent manually with that day's date:
+   ```bash
+   python restock_agent.py 2026-03-01
+   ```
 
-### View State in Real-Time
-```bash
-# In a third terminal
-watch -n 0.5 cat sim_state.json
-```
+3. Use `--step` mode so you can inspect the databases between days before advancing.
 
-### Check Last Update
-```python
-from datetime import datetime
-
-last_update = datetime.fromisoformat(state["metadata"]["last_update"])
-age = (datetime.now() - last_update).total_seconds()
-
-if age > 60:
-    print("Warning: State file is stale!")
-```
-
-### Validate State
-```python
-def validate_state(state):
-    """Check if state is valid."""
-    required_keys = ["simulation", "operations", "metadata"]
-    return all(key in state for key in required_keys)
-```
-
-## Comparison with Other Methods
-
-| Method | Pros | Cons | Best For |
-|--------|------|------|----------|
-| **State File** ✅ | Simple, reliable, decoupled | File I/O overhead | Most use cases |
-| Named Pipe | Direct control | Complex setup | Advanced control |
-| Database Polling | Direct data access | High overhead | Data analysis |
-| File Watching (inotify) | Instant notification | Platform-specific | Real-time needs |
-
-## State File Lifecycle
-
-```
-Simulation Start
-    ↓
-sim_state.json created (status: initializing)
-    ↓
-For each day:
-    ↓
-Update state (status: running, pending: [...])
-    ← Agent reads and acts
-    ↓
-Update state (status: day_complete)
-    ↓
-Next day...
-    ↓
-Final update (status: finished)
-    ↓
-Agent exits
-```
-
-## Summary
-
-✅ **Use the state file** - It's the cleanest way to sync agents
-✅ **Monitor `pending` operations** - Know exactly when to act
-✅ **Check `status`** - Ensure simulation is in correct state
-✅ **Handle all statuses** - Don't just check for "running"
-✅ **Use provided examples** - `sync_agent_example.py` as a template
-
-The state file approach gives you:
-- 🎯 **Perfect timing** - Know exactly when operations happen
-- 🔄 **Reliable synchronization** - No race conditions
-- 📊 **Full visibility** - See simulation progress
-- 🛠️ **Easy debugging** - Human-readable JSON
-- 🤝 **Loose coupling** - Agents independent of simulation
-
-Happy agent building! 🤖
+The agent receives the date as a plain argument, reads the databases, and writes back — exactly as it will in production. There is nothing simulator-specific in the agent code.

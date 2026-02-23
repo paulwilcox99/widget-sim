@@ -233,14 +233,13 @@ if __name__ == "__main__":
 
 ## Database Files to Monitor
 
-All database files are in `databases/`:
+All company system databases are in `databases/`:
 ```
 databases/
 ├── crm.db          # Orders, customer interactions
 ├── inventory.db    # BoM, stock levels
 ├── mes.db          # Manufacturing stages
-├── erp.db          # Financial transactions, payroll
-└── customers.db    # Customer pool (rarely changes)
+└── erp.db          # Financial transactions, payroll
 ```
 
 ## What Changes Each Day
@@ -250,7 +249,7 @@ databases/
 | **Order Generation** | `crm.db`: New rows in `orders` table |
 | **Order Processing** | `inventory.db`: Decremented stock<br>`crm.db`: Status changes<br>`mes.db`: New tracking rows<br>`erp.db`: Inventory usage transactions |
 | **Manufacturing Ops** | `mes.db`: Stage completions<br>`crm.db`: Status to shipped<br>`erp.db`: Customer payments |
-| **Inventory Restock** (every 3 days) | `inventory.db`: Increased stock<br>`erp.db`: Purchase transactions |
+| **Inventory Restock** | `inventory.db`: Increased stock<br>`erp.db`: Purchase transactions |
 | **Payroll** (Fridays) | `erp.db`: 200 payment transactions |
 
 ## Testing Scenarios
@@ -283,8 +282,8 @@ databases/
 ./venv/bin/python run_simulation.py 30 --step
 
 # Your monitor checks:
-# - Stock levels after each order
-# - Restock triggers (every 3 days)
+# - Stock levels after each order batch
+# - Inventory restock events (increases in inventory_levels)
 # - No negative inventory
 ```
 

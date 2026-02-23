@@ -1,7 +1,7 @@
 # Step Mode Guide
 
 ## Overview
-Step mode allows you to run the simulation interactively, pausing after each day to review results before continuing.
+Step mode allows you to run the simulator interactively, pausing after each simulated day so you can inspect the databases, run your agent manually, or review results before advancing to the next day.
 
 ## Usage
 
@@ -64,11 +64,10 @@ DAY 2/7: 2026-03-02 (Tuesday)
 ## When to Use Step Mode
 
 **Good for:**
-- Learning how the simulation works
-- Debugging issues with specific days
-- Observing patterns in order generation
-- Monitoring inventory levels closely
-- Teaching/demonstrations
+- Learning how the business databases change day to day
+- Developing agents — pause after each day, run your agent, inspect results
+- Debugging unexpected database state on a specific day
+- Demonstrations — explain each operation as it happens
 
 **Not ideal for:**
 - Long simulations (30+ days)
@@ -96,32 +95,34 @@ DAY 2/7: 2026-03-02 (Tuesday)
 
 ## Example Workflows
 
-### Learning the System (First Time)
+### Learning the Database Schema (First Time)
 ```bash
 # Start fresh, step through one week
 ./venv/bin/python run_simulation.py 7 --step
 
-# Review each day's operations
-# Press 's' on Friday to see payroll impact
-# Press 'q' after understanding the flow
+# After each day, query the databases directly to see what changed:
+#   sqlite3 databases/crm.db "SELECT status, COUNT(*) FROM orders GROUP BY status"
+#   sqlite3 databases/erp.db "SELECT transaction_type, SUM(amount) FROM financial_transactions GROUP BY transaction_type"
+# Press 's' on Friday to see payroll impact in the summary
+# Press 'q' after you understand the data flow
 ```
 
-### Debugging Inventory Issues
+### Developing an Agent
 ```bash
-# Initialize fresh
-./venv/bin/python run_simulation.py 10 --step
+# Disable the operation your agent will handle
+./venv/bin/python run_simulation.py 10 "2026-03-01" --step --disable restock
 
-# Watch for "INSUFFICIENT INVENTORY" messages
-# Press 's' to check stock levels
-# Continue or quit when issue is clear
+# After each day pauses, run your agent with that day's date:
+#   python restock_agent.py 2026-03-01
+# Inspect results, then press Enter to advance
 ```
 
 ### Demonstrating to Others
 ```bash
-# Use a fixed start date for consistency
+# Use a fixed start date for reproducibility
 ./venv/bin/python run_simulation.py 14 "2026-01-06" --step
 
-# Explain each operation as it happens
-# Use 's' to show real-time financial impact
+# Explain each database change as it happens
+# Use 's' to show running financial totals
 # Let attendees decide when to continue
 ```

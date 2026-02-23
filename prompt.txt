@@ -1,0 +1,177 @@
+Help me create a program that will simulate the business operations of a widget manufacturing company called Acme Widget Works.  The company manufactures three product lines (Widget_Pro, Widget, and Widget_Classic) and sells them to business customers.  The workflow moves from order receipt through manufacturing (assembly, test, inspection, shipping) to fulfillment and payment.
+
+The program simulates each day of business operations.  The user inputs a start date (if none specified use current date) and how many days to simulate.  There are Simulation Databases set up at the beginning to hold resource information (customers, employees, parts) that will be used to generate synthetic activity.  These are created with Faker at initialization.
+
+The company consists of Company Databases that hold information and track the flow of data as the simulation progresses.  These represent real systems used in the manufacturing company.  The program has Simulation Functions used during the simulation to generate synthetic data, manage simulation state, and report on results.
+
+The program has Worker Functions that represent the actions workers perform each day to move orders through the system.
+
+The program should initialize all databases and then loop from the start date for the number of days specified, incrementing the simulation date each loop and stepping through each Worker Function for that date.  Each Worker Function should be disableable from the command line so it can be replaced with an external agent script.
+
+The idea is for this simulation program to run in parallel with other programs that synchronize to the current simulation date, monitor the company databases, and act independently.  The user should be able to step through each day manually (pressing Enter to advance to the next day) or run continuously with a configurable delay between days.  A JSON state file should be written at the start and end of each day so external agents can detect when a new day's data is ready.
+
+Create the program in Python.  Use a virtual environment.  Use Faker for synthetic data generation.  Use separate SQLite database files per system.
+
+Start by reading through this entire description, then ask any clarifying questions.  Then plan what you would build and suggest any features that may improve the program.  Create an implementation plan for review before building.
+
+At the end, create an agent_developer_guide.md file in a docs directory that describes how a developer can create AI agents that run separately from the simulation.  Agents connect to the company databases directly, poll a single JSON file to know when a new business day has started, and then read and write the databases as they would in a live manufacturing environment.  Agents do not need to know anything about the simulation.  From the agent's perspective, the databases are live company systems.  The only simulation artifact the agent touches is sim_state.json, which serves as a lightweight clock signal telling the agent that a new day's data is ready.
+
+
+Simulation Databases:
+1) Customers : database holding a pool of business customer information used to generate orders during simulation
+	contains: customer name, street address, city, state, zip code, email, phone
+	created at initialization with 1000 records using Faker; records are sampled randomly each day to generate orders
+	this database is read-only during simulation — it exists only to provide realistic customer data
+
+2) (No separate Employees simulation database — employees are seeded directly into the ERP at initialization and stay there as live company data)
+
+
+Company Databases:
+1) CRM (customer relationship management) : tracks all customer orders from receipt through shipment
+	contains: order_id, customer_name, widget_type, quantity, unit_price, date_ordered, status, date_shipped, predicted_ship_date
+	widget_type is one of: Widget_Pro, Widget, Widget_Classic
+	status flows: order_received → order_processing → order_shipped
+	predicted_ship_date is set at order creation as 7-14 days out (random)
+	date_shipped is filled in when the order completes the shipping production stage
+
+2) Inventory : tracks parts stock levels and the Bill of Materials for each widget type
+	contains two tables:
+	  bom table: widget_type, part_name, quantity_needed (per unit), unit_cost
+	    defines which parts and how many are required to build one unit of each widget type
+	    three widget types each with 5-25 unique parts; approximately 15% of parts are shared across widget types
+	  inventory_levels table: part_name, quantity_available
+	    current stock count for each unique part across all widget types
+	pricing: each widget's base retail price is set at 1.8x-2.5x its total BOM manufacturing cost
+	parts come from categories including: Screw, Bolt, Nut, Washer, Circuit-Board, Panel, Cable, Connector, Housing, Display, Button, Switch, Motor, Sensor, Battery, LED, Capacitor, Resistor, Chip, Frame
+
+3) MES (manufacturing execution system) : tracks each order's progress through the four production stages
+	contains: tracking_id, order_id, stage, start_datetime, completion_datetime
+	four stages in sequence: assembly → test → inspection → shipping
+	one row per order per stage (four rows total per order)
+	each stage has a random duration of 3-72 hours; a stage completes when current_time >= start_time + random_duration
+	when assembly completes, test starts immediately; when test completes, inspection starts, and so on
+	when shipping completes, the order is marked shipped in CRM and payment is recorded in ERP
+
+4) ERP (enterprise resource planning) : tracks all employees and all financial transactions
+	contains two tables:
+	  employees table: employee_id, name, title, weekly_salary
+	    200 employees across titles: Assembly Worker, Test Engineer, Quality Inspector, Shipping Clerk, Inventory Manager, Production Supervisor, Accountant, Sales Representative, Purchasing Agent, Maintenance Technician, Production Planner, Warehouse Manager, Quality Assurance Manager, Manufacturing Engineer, Supply Chain Coordinator, HR Manager, IT Support Specialist, Operations Manager, CEO, CFO
+	    salary ranges: CEO/CFO $120k-$150k/year; managers $70k-$100k; engineers/supervisors $55k-$75k; other roles $30k-$55k (all stored as weekly_salary = annual/52)
+	  financial_transactions table: transaction_id, transaction_type, amount, date, description, related_id
+	    transaction_type is one of: inventory_purchase, employee_payment, customer_payment
+	    customer_payment: positive amount recorded when an order ships (quantity * unit_price)
+	    inventory_purchase: negative amount recorded when parts are consumed for an order; positive amount recorded when parts are restocked
+	    employee_payment: negative amount recorded for each employee on payroll Fridays
+
+
+Initialization: at start of simulation do the following
+1) Create 1000 customer records in the customers simulation database using Faker for name, street_address, city, state, zip_code, email, phone
+2) Create the CRM database with the orders table — empty, ready to receive orders
+3) Create the Inventory database:
+	a) Generate Bills of Materials for three widget types (Widget_Pro, Widget, Widget_Classic)
+	   Each widget type gets 5-25 randomly named parts with random quantity_needed (1-20) and unit_cost ($0.25-$25.00)
+	   Share approximately 15% of parts across widget types to simulate real-world component reuse
+	   Set each widget's retail price at 1.8x-2.5x its total BOM cost (markup chosen randomly)
+	b) Calculate initial inventory_levels to support building 100 units of each widget type
+	   For parts shared across widget types, sum the requirements across all widget types × 100
+	c) Save a widget_prices.txt reference file listing the retail price for each widget type
+4) Create the MES database with the production_tracking table — empty, ready for manufacturing entries
+5) Create the ERP database:
+	a) Generate 200 employees using Faker for name, random title from the defined list, and salary based on title range
+	b) Insert all employees into the employees table
+	c) Create the financial_transactions table — empty, ready to record transactions
+
+
+Simulation Functions:
+1) run_simulation : the main orchestrator — not a real business function
+	When: invoked directly by the user
+	What: accepts command-line arguments (number of days, optional start date, --step flag, --no-init flag, --disable flags)
+	      initializes databases unless --no-init is specified
+	      loops one day at a time calling each Worker Function in sequence
+	      writes sim_state.json at the start and end of each day
+	      in step mode, pauses after each day waiting for user to press Enter (supports 'q' to quit, 's' to show summary)
+	      prints a final financial and order summary at the end of the simulation
+	CLI: python run_simulation.py <days> [start_date] [--step] [--no-init] [--disable process] [--disable ops] [--disable restock] [--disable payroll]
+
+2) sim_state : writes and reads the simulation state JSON file used for agent synchronization — not a real business function
+	What: writes a JSON file (sim_state.json) containing:
+	      simulation.date, simulation.time, simulation.datetime, simulation.day_number, simulation.total_days, simulation.status, simulation.progress_percent
+	      operations.disabled (list of disabled worker names), operations.pending (list of operations agents should perform)
+	      metadata.last_update, metadata.state_version
+	status values: initializing, running, day_complete, paused, finished, interrupted, error
+	agents poll this file to detect when a new day has started (status transitions to day_complete)
+
+3) show_dbs : exports all database contents to markdown files for inspection — not a real business function
+	When: run manually at any time to inspect current state
+	What: reads all five databases and writes one markdown file per database (customers_dump.md, crm_dump.md, inventory_dump.md, mes_dump.md, erp_dump.md) plus a summary.md showing row counts per table
+	Output directory: database_dumps/
+
+4) data_generators : synthetic data generation utilities — not a real business function
+	generate_customers(count): returns list of (name, street_address, city, state, zip_code, email, phone) tuples using Faker; seeded for reproducibility
+	generate_employees(count): returns list of (name, title, weekly_salary) tuples; titles drawn from defined list; salary computed from title-based ranges
+	generate_boms(): returns (bom_list, widget_prices_dict) — generates parts, quantities, costs, and retail prices for all three widget types
+	calculate_initial_inventory(boms): returns (part_name, quantity_available) tuples for enough stock to build 100 of each widget type
+
+
+Worker Functions:
+1) receive_order (gen_order.py) : When: every day, called 0-20 times (random)
+	What: represents a sales representative or customer service agent receiving a customer order
+	      selects a random customer from the customers simulation database
+	      selects a random widget_type from [Widget_Pro, Widget, Widget_Classic]
+	      selects a random quantity from 1-20 units
+	      calculates unit_price: BOM cost / (1 - 0.30) × random variance of ±10% to simulate market pricing (target 30% gross margin)
+	      sets status to order_received and predicted_ship_date to 7-14 days out (random)
+	      inserts the order into CRM orders table
+	Databases written: CRM (orders)
+	Databases read: customers.db, inventory.db (bom table for cost lookup)
+
+2) process_order (process_order.py) : When: every day
+	What: represents the order fulfillment team accepting and releasing orders to the factory floor
+	      finds all orders in CRM with status order_received
+	      for each order, checks inventory_levels against the BOM requirements (quantity_needed × order_quantity for each part)
+	      if any part is insufficient, skips the order (logs missing parts)
+	      if inventory is sufficient:
+	        deducts the required parts from inventory_levels for each BOM component
+	        records a negative inventory_purchase transaction in ERP for the total BOM cost of the order
+	        updates CRM order status to order_processing
+	        creates four rows in MES production_tracking for the order (assembly, test, inspection, shipping)
+	        the assembly row gets start_datetime set to the current process time; the other three rows have start_datetime NULL
+	Databases read: CRM (orders), inventory.db (bom, inventory_levels)
+	Databases written: inventory.db (inventory_levels), ERP (financial_transactions), CRM (orders), MES (production_tracking)
+
+3) run_manufacturing_ops (run_ops.py) : When: every day
+	What: represents manufacturing floor workers, test engineers, quality inspectors, and shipping clerks advancing production
+	      finds all orders in CRM with status order_processing
+	      for each order, reads the MES production_tracking rows
+	      for each incomplete stage (completion_datetime is NULL) that has been started (start_datetime is not NULL):
+	        assigns a random duration of 3-72 hours
+	        if current_time >= start_time + duration, marks the stage complete and starts the next stage
+	        if the current stage is not yet complete, stops processing further stages for that order
+	      when the shipping stage completes:
+	        updates CRM order status to order_shipped and sets date_shipped
+	        records a positive customer_payment transaction in ERP for (quantity × unit_price)
+	Databases read: CRM (orders), MES (production_tracking)
+	Databases written: MES (production_tracking), CRM (orders), ERP (financial_transactions)
+
+4) restock_inventory (update_inventory.py) : When: every 3 days
+	What: represents the inventory manager or purchasing agent checking stock levels and placing parts orders
+	      scans all parts in inventory_levels
+	      threshold for reorder: current quantity_available is below the quantity needed to build 10 units of each widget type that uses that part
+	      for any part below threshold, orders enough to bring stock up to the level needed to build 100 units of each widget type that uses that part
+	      purchase price is the BOM unit_cost with ±10% variance (simulates supplier pricing fluctuation)
+	      updates inventory_levels quantity_available to the new level
+	      records a positive inventory_purchase transaction in ERP for each part restocked
+	Databases read: inventory.db (inventory_levels, bom)
+	Databases written: inventory.db (inventory_levels), ERP (financial_transactions)
+
+5) pay_employees (pay_employees.py) : When: every Friday
+	What: represents the payroll/accounting team running the weekly payroll
+	      checks if the current simulation date is a Friday; if not, does nothing
+	      if Friday, retrieves all employees from the ERP employees table
+	      for each employee, records a negative employee_payment transaction in ERP for their weekly_salary amount
+	      description field records the employee name and title for each transaction
+	Databases read: ERP (employees)
+	Databases written: ERP (financial_transactions)
+
+
+I want to use this simulator to build AI agents that will run in a parallel process.  Write documentation such as a developer guide describing the databases and operation of the simulation, a guide for syncing two processes using the state file and integrating to run both processes either step by step or free-running with a wait between each new day, as well as any other information an agent developer may need.

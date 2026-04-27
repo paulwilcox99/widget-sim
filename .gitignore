@@ -36,3 +36,6 @@ Thumbs.db
 
 # Simulation state
 sim_state.json
+
+# Agent subdirectories (each is its own repo)
+simple-inventory/

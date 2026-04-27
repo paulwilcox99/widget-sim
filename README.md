@@ -26,13 +26,13 @@ The simulator models a complete manufacturing operation with:
 ```bash
 # Clone the repository
 git clone <your-repo-url>
-cd widget
+cd widget-sim
 
 # Create virtual environment
 python3 -m venv venv
 
 # Install dependencies
-./venv/bin/pip install faker
+./venv/bin/pip install -r requirements.txt
 
 # Initialize databases
 ./venv/bin/python create_sim.py
@@ -186,30 +186,40 @@ Net Profit:                  $  339,631.52
 ## 📁 Project Structure
 
 ```
-widget/
+widget-sim/
 ├── create_sim.py              # Database initialization
 ├── schemas.py                 # Database schemas and wrappers
 ├── data_generators.py         # Faker-based data generation
-├── gen_order.py              # Order generation tool
-├── process_order.py          # Order processing tool
-├── update_inventory.py       # Inventory restocking tool
-├── run_ops.py                # Manufacturing operations tool
-├── pay_employees.py          # Payroll processing tool
-├── show_dbs.py               # Database export tool
-├── run_simulation.py         # Main simulation orchestrator
-├── example_monitor.py        # Example monitoring script
-├── requirements.txt          # Python dependencies
-├── README.md                 # This file
-├── STEP_MODE_GUIDE.md       # Interactive step mode guide
-├── TESTING_WITH_MONITORS.md # Testing guide
-├── .gitignore               # Git ignore rules
-├── venv/                    # Virtual environment (not in git)
-└── databases/               # SQLite database files (not in git)
-    ├── customers.db
-    ├── crm.db
-    ├── inventory.db
-    ├── mes.db
-    └── erp.db
+├── gen_order.py               # Order generation tool
+├── process_order.py           # Order processing tool
+├── update_inventory.py        # Inventory restocking tool
+├── run_ops.py                 # Manufacturing operations tool
+├── pay_employees.py           # Payroll processing tool
+├── show_dbs.py                # Database export tool
+├── run_simulation.py          # Main simulation orchestrator
+├── example_monitor.py         # Example monitoring script
+├── requirements.txt           # Python dependencies
+├── README.md                  # This file
+├── AGENT_DEVELOPER_GUIDE.md   # Guide for building agents
+├── AGENT_INTEGRATION.md       # Agent integration patterns
+├── AGENT_SYNC_GUIDE.md        # State file synchronization guide
+├── STEP_MODE_GUIDE.md         # Interactive step mode guide
+├── TESTING_WITH_MONITORS.md   # Testing guide
+├── .gitignore                 # Git ignore rules
+├── venv/                      # Virtual environment (not in git)
+├── databases/                 # SQLite database files (not in git)
+│   ├── customers.db
+│   ├── crm.db
+│   ├── inventory.db
+│   ├── mes.db
+│   └── erp.db
+└── simple-inventory/          # Example LLM inventory agent
+    ├── llm_inventory_agent.py
+    ├── requirements.txt
+    ├── venv/                  # Agent virtual environment (not in git)
+    ├── start_simulation.sh    # Helper: launch simulator
+    ├── start_agent.sh         # Helper: launch agent
+    └── README.md
 ```
 
 ## 🎓 Learning Resources
@@ -284,6 +294,114 @@ See individual script help messages:
 - ✅ Test ETL processes
 - ✅ Benchmark database performance
 - ✅ Develop data analytics dashboards
+
+---
+
+## 🤖 Running with the LLM Inventory Agent
+
+`simple-inventory` is an example AI agent that replaces the simulator's built-in restocking logic with an OpenAI LLM. The agent runs in a separate process, monitors `sim_state.json` to detect each new simulation day, then queries current inventory and asks the LLM whether and how much to reorder.
+
+### How it works
+
+```
+widget-sim (Terminal 1)          simple-inventory (Terminal 2)
+─────────────────────────        ──────────────────────────────
+Day 1 runs...                    watching sim_state.json...
+writes sim_state: day_complete ─→ detects new day
+⏱ waiting 5s...                  queries inventory + LLM
+                                  executes restock if needed
+Day 2 runs...                    watching sim_state.json...
+```
+
+The simulator disables its own restock worker (`--disable restock`) so the agent is the only thing making restocking decisions. The `--delay 5` flag gives the agent 5 seconds between days to act.
+
+### Step 1 — Install both components
+
+```bash
+# Simulator (from widget-sim/)
+python3 -m venv venv
+./venv/bin/pip install -r requirements.txt
+
+# Agent (from simple-inventory/)
+cd simple-inventory
+python3 -m venv venv
+./venv/bin/pip install -r requirements.txt
+```
+
+### Step 2 — Configure OpenAI API key
+
+```bash
+# From simple-inventory/
+cp .env.example .env
+# Edit .env and set: OPENAI_API_KEY=sk-...
+```
+
+Or export it as an environment variable:
+```bash
+export OPENAI_API_KEY='sk-...'
+```
+
+### Step 3 — Initialize the simulation databases
+
+```bash
+# From widget-sim/
+./venv/bin/python create_sim.py
+```
+
+### Step 4 — Test the agent setup
+
+```bash
+# From simple-inventory/
+./venv/bin/python test_agent.py
+```
+
+This verifies the API key, database access, and LLM connectivity before you run the full simulation.
+
+### Step 5 — Run both together
+
+Open two terminal windows:
+
+**Terminal 1** — start the simulator (from `widget-sim/`):
+```bash
+./venv/bin/python run_simulation.py 30 "2026-04-15" --disable restock --delay 5
+```
+
+**Terminal 2** — start the agent (from `simple-inventory/`):
+```bash
+./venv/bin/python llm_inventory_agent.py --simulation
+```
+
+Or use the helper scripts (both from `simple-inventory/`):
+```bash
+# Terminal 1:
+./start_simulation.sh
+
+# Terminal 2:
+./start_agent.sh
+```
+
+### Step mode (manual day-by-day control)
+
+Use `--step` instead of `--delay` if you want to manually advance each day and watch the agent respond before continuing:
+
+```bash
+# Terminal 1 (from widget-sim/):
+./venv/bin/python run_simulation.py 7 --disable restock --step
+
+# Terminal 2 (from simple-inventory/):
+./venv/bin/python llm_inventory_agent.py --simulation --check-interval 2
+```
+
+Press Enter in Terminal 1 to advance each day. The agent in Terminal 2 will run its inventory check automatically.
+
+### Agent documentation
+
+| File | Contents |
+|------|----------|
+| `AGENT_DEVELOPER_GUIDE.md` | Database schemas, field definitions, and connection details |
+| `AGENT_SYNC_GUIDE.md` | How to read `sim_state.json` and synchronize with the simulation |
+| `AGENT_INTEGRATION.md` | Patterns for building agents (polling, step mode, free-running) |
+| `simple-inventory/README.md` | Full documentation for the LLM inventory agent |
 
 ---
 

@@ -14,6 +14,7 @@ import sys
 import argparse
 import subprocess
 import random
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -341,6 +342,13 @@ Agent Replacement Examples:
         choices=["process", "ops", "restock", "payroll"],
         help="Disable specific operations (can be used multiple times). Choices: process (order processing), ops (manufacturing operations), restock (inventory restocking), payroll (employee payment)"
     )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=0,
+        metavar="SECONDS",
+        help="Seconds to pause between days in continuous mode (default: 0)"
+    )
 
     args = parser.parse_args()
 
@@ -413,8 +421,10 @@ Agent Replacement Examples:
             simulate_day(day_num, current_date, args.days, disabled_operations, state_manager)
             current_date += timedelta(days=1)
 
+            if day_num >= args.days:
+                pass  # no pause after last day
             # Step mode - pause for user input
-            if args.step and day_num < args.days:
+            elif args.step:
                 print("\n" + "-" * 70)
                 user_input = input("Press Enter to continue to next day (or 'q' to quit, 's' for summary): ").strip().lower()
 
@@ -426,6 +436,9 @@ Agent Replacement Examples:
                     print_final_summary()
                     print("\n" + "-" * 70)
                     input("Press Enter to continue simulation: ")
+            elif args.delay > 0:
+                print(f"\n⏱  Waiting {args.delay:.0f}s before next day...")
+                time.sleep(args.delay)
 
         # Print final summary
         print_final_summary()

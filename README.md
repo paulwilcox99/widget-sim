@@ -359,7 +359,20 @@ This verifies the API key, database access, and LLM connectivity before you run 
 
 ### Step 5 — Run both together
 
-Open two terminal windows:
+The easiest way is the `run_all.sh` script, which handles setup and launches both processes in a single terminal with prefixed, interleaved output:
+
+```bash
+# From widget-sim/
+export OPENAI_API_KEY='sk-...'
+./run_all.sh                        # 30 days from today
+./run_all.sh 7                      # 7 days
+./run_all.sh 7 2026-05-01           # 7 days from a specific date
+MODEL=gpt-4 ./run_all.sh 30        # use a different model
+```
+
+`run_all.sh` automatically installs venvs and initializes databases on first run. Press **Ctrl+C** to stop both processes cleanly.
+
+Alternatively, run them manually in two terminal windows:
 
 **Terminal 1** — start the simulator (from `widget-sim/`):
 ```bash

@@ -93,8 +93,8 @@ SIM_PID=$!
 sleep 2
 
 # ── Launch agent ──────────────────────────────────────────────────────────────
-(cd "$AGENT_DIR" && exec ./venv/bin/python llm_inventory_agent.py \
-    --simulation --model "$MODEL") \
+(cd "$AGENT_DIR" && exec ./venv/bin/python -u llm_inventory_agent.py \
+    --simulation --model "$MODEL" --check-interval 2) \
     > "$AGENT_FIFO" 2>&1 &
 AGENT_PID=$!
 
